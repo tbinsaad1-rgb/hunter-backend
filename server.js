@@ -12,7 +12,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hunter-secret-change-in-production-2024';
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+}));
+app.options('*', cors());
 app.use(express.json());
 
 // ── قاعدة البيانات ──────────────────────────────────────────────

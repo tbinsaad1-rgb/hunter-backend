@@ -333,8 +333,6 @@ app.get('/api/version', (req, res) => {
   });
 });
 
-// تشغيل السيرفر
-app.listen(PORT, () => console.log(`🚀 هنتر Backend يعمل على المنفذ ${PORT}`));
 
 // ── رفع ملف إكسل للمطلوبة (preview) ────────────────────────────────
 app.post('/api/admin/wanted/upload-preview', authMiddleware, adminOnly,
@@ -627,4 +625,8 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     found_count:       foundByMe.length,
     total_wanted:      allWanted.length,
   });
+});
+// تشغيل السيرفر
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 هنتر Backend يعمل على المنفذ ${PORT}`);
 });

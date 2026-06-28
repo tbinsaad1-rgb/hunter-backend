@@ -12,12 +12,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hunter-secret-change-in-production-2024';
 
-app.use(cors({
-  origin: '*',
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
-}));
-app.options('*', cors());
+// CORS - يقبل كل المصادر
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 app.use(express.json());
 
 // ── قاعدة البيانات ──────────────────────────────────────────────
@@ -333,6 +335,8 @@ app.get('/api/version', (req, res) => {
   });
 });
 
+// تشغيل السيرفر
+app.listen(PORT, () => console.log(`🚀 هنتر Backend يعمل على المنفذ ${PORT}`));
 
 // ── رفع ملف إكسل للمطلوبة (preview) ────────────────────────────────
 app.post('/api/admin/wanted/upload-preview', authMiddleware, adminOnly,
@@ -625,8 +629,4 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     found_count:       foundByMe.length,
     total_wanted:      allWanted.length,
   });
-});
-// تشغيل السيرفر
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 هنتر Backend يعمل على المنفذ ${PORT}`);
 });

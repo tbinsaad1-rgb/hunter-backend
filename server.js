@@ -671,46 +671,57 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     });
   });
 
-  // كل اللوحات المطلوبة الحالية
-  const allWanted = db.prepare('SELECT * FROM wanted ORDER BY last_portfolio_update DESC, created_at DESC').all();
+  // ── المنطق الصحيح ──────────────────────────────────────────────
+  // لوحات المحافظ التي رصدها المندوب فعلاً (تطابق بين سجلاته والمحافظ)
+  // نجلبها من scans مباشرة (is_wanted = 1 يعني تطابقت وقت التسجيل)
+  const myFoundScans = db.prepare(`
+    SELECT s.plate, s.lat, s.lng, s.note, s.created_at,
+           w.company, w.model, w.portfolio, w.reason, w.last_portfolio_update
+    FROM scans s
+    INNER JOIN wanted w ON s.plate = w.plate
+    WHERE s.user_id = ?
+    ORDER BY s.created_at DESC
+  `).all(req.user.id);
 
-  const result = allWanted.map(w => ({
-    ...w,
-    is_found_by_me: seenSet.has(w.plate),           // رصدتها أنا
-    is_new_in_portfolio: w.last_portfolio_update > lastSeen, // جديدة منذ آخر مرة فتحت التطبيق
-  }));
+  // تجميع كل مواقع الرصد لكل لوحة
+  const foundMap = {};
+  myFoundScans.forEach(s => {
+    if (!foundMap[s.plate]) {
+      foundMap[s.plate] = {
+        plate: s.plate,
+        company: s.company,
+        model: s.model,
+        portfolio: s.portfolio,
+        reason: s.reason,
+        last_portfolio_update: s.last_portfolio_update,
+        scan_locations: [],
+      };
+    }
+    foundMap[s.plate].scan_locations.push({
+      lat: s.lat, lng: s.lng,
+      note: s.note, time: s.created_at,
+    });
+  });
 
-  // لوح مطلوبة: رصدتها أنا — مع كل مواقع الرصد
-  const foundByMe = result
-    .filter(w => w.is_found_by_me)
-    .map(w => ({
-      ...w,
-      scan_locations: seenMap[w.plate] || [],
-    }));
+  // لوح رصدتها = كل اللوحات التي تطابقت
+  const foundByMe = Object.values(foundMap);
 
-  // إحالات جديدة — أيضاً نضيف مواقع إذا كان رصدها من قبل (قبل إضافتها للمطلوبات)
-  const newReferrals = result
-    .filter(w => !w.is_found_by_me && w.is_new_in_portfolio)
-    .map(w => ({
-      ...w,
-      scan_locations: seenMap[w.plate] || [],
-    }));
+  // إحالات جديدة = رصدها المندوب + أُضيفت للمحفظة بعد آخر زيارة له
+  const newReferrals = foundByMe.filter(w => w.last_portfolio_update > lastSeen);
 
-  // قديمة لم أرصدها — مع مواقع إذا وجدت
-  const oldUnfound = result
-    .filter(w => !w.is_found_by_me && !w.is_new_in_portfolio)
-    .map(w => ({
-      ...w,
-      scan_locations: seenMap[w.plate] || [],
-    }));
+  // قديمة = رصدها المندوب + كانت في المحفظة قبل آخر زيارة
+  const oldUnfound = foundByMe.filter(w => w.last_portfolio_update <= lastSeen);
+
+  // إجمالي لوحات المحافظ (للإحصاء فقط)
+  const totalWanted = db.prepare('SELECT COUNT(*) as c FROM wanted').get().c;
 
 
   res.json({
-    new_referrals:  newReferrals,
-    found_by_me:    foundByMe,
-    old_unfound:    oldUnfound,
+    new_referrals:  newReferrals,   // رصدتها + جديدة في المحفظة
+    found_by_me:    foundByMe,      // كل اللوحات التي رصدتها وهي مطلوبة
+    old_unfound:    oldUnfound,     // رصدتها + كانت قديمة في المحفظة
     new_count:      newReferrals.length,
     found_count:    foundByMe.length,
-    total_wanted:   allWanted.length,
+    total_wanted:   totalWanted,
   });
 });

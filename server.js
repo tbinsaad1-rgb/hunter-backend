@@ -20,7 +20,17 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-app.use(express.json());
+// JSON parser — لا يطبق على multipart/form-data (ملفات Excel)
+app.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.includes('multipart/form-data')) return next();
+  express.json({ limit: '50mb' })(req, res, next);
+});
+app.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.includes('multipart/form-data')) return next();
+  express.urlencoded({ extended: true, limit: '50mb' })(req, res, next);
+});
 
 // ── قاعدة البيانات ──────────────────────────────────────────────
 const db = new Database(path.join(__dirname, 'hunter.db'));
@@ -465,6 +475,17 @@ app.post('/api/admin/portfolios/upload', authMiddleware, adminOnly,
     }
   }
 );
+
+// معالج أخطاء multer
+app.use((err, req, res, next) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: 'حجم الملف كبير جداً (الحد الأقصى 50MB)' });
+  }
+  if (err.type === 'entity.too.large') {
+    return res.status(400).json({ error: 'حجم البيانات كبير جداً' });
+  }
+  res.status(500).json({ error: err.message || 'خطأ في السيرفر' });
+});
 
 // ─── تأكيد حفظ المحفظة (يحذف القديمة ويضيف الجديدة) ───────────
 app.post('/api/admin/portfolios/confirm', authMiddleware, adminOnly, (req, res) => {

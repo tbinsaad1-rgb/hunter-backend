@@ -611,26 +611,38 @@ app.get('/api/scans/export-wanted', authMiddleware, (req, res) => {
     return res.status(403).json({ error: 'ليس لديك صلاحية تصدير المطلوبات' });
   }
 
+  // جلب كل السجلات التي تطابقت مع المحافظ (سواء وقت التسجيل أو بعده)
   const scans = db.prepare(`
-    SELECT s.*, w.company as w_company, w.model as w_model,
-           w.portfolio as w_portfolio, w.reason as w_reason
+    SELECT s.plate, s.plate_spaced, s.lat, s.lng, s.note,
+           s.created_at, s.user_name,
+           w.company, w.model, w.portfolio, w.reason
     FROM scans s
-    LEFT JOIN wanted w ON s.plate = w.plate
-    WHERE s.user_id = ? AND s.is_wanted = 1
+    INNER JOIN wanted w ON s.plate = w.plate
+    WHERE s.user_id = ?
     ORDER BY s.created_at DESC
   `).all(req.user.id);
 
-  res.json(scans.map(s => ({
-    plate:           s.plate,
-    plate_spaced:    s.plate_spaced || s.plate,
-    wanted_company:  s.wanted_company || s.w_company || '',
-    wanted_model:    s.wanted_model   || s.w_model   || '',
-    wanted_portfolio:s.wanted_portfolio|| s.w_portfolio|| '',
-    wanted_reason:   s.w_reason || '',
-    note:            s.note || '',
-    lat:             s.lat,
-    lng:             s.lng,
-    created_at:      s.created_at,
+  // إزالة المكررات — نبقي آخر رصد لكل لوحة
+  const seen = new Set();
+  const unique = scans.filter(s => {
+    if (seen.has(s.plate)) return false;
+    seen.add(s.plate);
+    return true;
+  });
+
+  res.json(unique.map(s => ({
+    plate:            s.plate,
+    plate_spaced:     s.plate_spaced || s.plate,
+    user_name:        s.user_name || '',
+    wanted_company:   s.company || '',
+    wanted_model:     s.model   || '',
+    wanted_portfolio: s.portfolio || '',
+    wanted_reason:    s.reason  || '',
+    note:             s.note    || '',
+    lat:              s.lat,
+    lng:              s.lng,
+    map_link:         s.lat && s.lng ? `https://maps.google.com/?q=${s.lat},${s.lng}` : '',
+    created_at:       s.created_at,
   })));
 });
 

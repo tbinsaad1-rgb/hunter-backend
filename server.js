@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const path = require('path');
 const multer = require('multer');
 const { processExcelBuffer } = require('./upload_handler');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -435,11 +435,20 @@ app.post('/api/admin/portfolios/upload', authMiddleware, adminOnly,
     if (!portfolioName) return res.status(400).json({ error: 'أدخل اسم المحفظة' });
 
     try {
+      // تحقق من حجم الملف
+      if (req.file.buffer.length > 50 * 1024 * 1024) {
+        return res.status(400).json({ error: 'حجم الملف كبير جداً (الحد الأقصى 50MB)' });
+      }
+
       let result;
       try {
         result = processExcelBuffer(req.file.buffer, portfolioName);
       } catch (parseErr) {
         return res.status(400).json({ error: 'تعذر قراءة الملف: ' + parseErr.message });
+      }
+
+      if (!result || !result.plates) {
+        return res.status(400).json({ error: 'الملف فارغ أو لا يحتوي على بيانات صالحة' });
       }
 
       res.json({
@@ -616,20 +625,30 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     ON CONFLICT(user_id) DO UPDATE SET last_seen = datetime('now')
   `).run(req.user.id);
 
-  // اللوحات التي رصدها المندوب مع موقع الرصد
-  const seenScans = db.prepare(`
+  // كل سجلات المندوب (مطلوبة وغير مطلوبة) لمعرفة المواقع
+  const allMyScans = db.prepare(`
     SELECT plate, lat, lng, note, created_at
     FROM scans 
-    WHERE user_id = ? AND is_wanted = 1
+    WHERE user_id = ?
     ORDER BY created_at DESC
   `).all(req.user.id);
   
-  // مجموعة اللوحات المرصودة
+  // مجموعة اللوحات المرصودة (المطلوبة فقط)
+  const seenScans = db.prepare(`
+    SELECT DISTINCT plate FROM scans WHERE user_id = ? AND is_wanted = 1
+  `).all(req.user.id);
   const seenSet = new Set(seenScans.map(s => s.plate));
   
-  // خريطة للوصول السريع لبيانات الرصد
+  // خريطة لكل مواقع الرصد لكل لوحة (قد تكون متعددة)
   const seenMap = {};
-  seenScans.forEach(s => { if (!seenMap[s.plate]) seenMap[s.plate] = s; });
+  allMyScans.forEach(s => {
+    if (!seenMap[s.plate]) seenMap[s.plate] = [];
+    seenMap[s.plate].push({
+      lat: s.lat, lng: s.lng,
+      note: s.note,
+      time: s.created_at,
+    });
+  });
 
   // كل اللوحات المطلوبة الحالية
   const allWanted = db.prepare('SELECT * FROM wanted ORDER BY last_portfolio_update DESC, created_at DESC').all();
@@ -640,27 +659,37 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     is_new_in_portfolio: w.last_portfolio_update > lastSeen, // جديدة منذ آخر مرة فتحت التطبيق
   }));
 
-  // إحالات جديدة: في المحفظة + لم أرصدها + أُضيفت بعد آخر زيارة
-  const newReferrals = result.filter(w => !w.is_found_by_me && w.is_new_in_portfolio);
-  // لوح مطلوبة: رصدتها أنا — مع إضافة موقع الرصد
+  // لوح مطلوبة: رصدتها أنا — مع كل مواقع الرصد
   const foundByMe = result
     .filter(w => w.is_found_by_me)
     .map(w => ({
       ...w,
-      scan_lat: seenMap[w.plate]?.lat || null,
-      scan_lng: seenMap[w.plate]?.lng || null,
-      note:     seenMap[w.plate]?.note || null,
-      scan_time: seenMap[w.plate]?.created_at || null,
+      scan_locations: seenMap[w.plate] || [],
     }));
-  // قديمة لم أرصدها
-  const oldUnfound  = result.filter(w => !w.is_found_by_me && !w.is_new_in_portfolio);
+
+  // إحالات جديدة — أيضاً نضيف مواقع إذا كان رصدها من قبل (قبل إضافتها للمطلوبات)
+  const newReferrals = result
+    .filter(w => !w.is_found_by_me && w.is_new_in_portfolio)
+    .map(w => ({
+      ...w,
+      scan_locations: seenMap[w.plate] || [],
+    }));
+
+  // قديمة لم أرصدها — مع مواقع إذا وجدت
+  const oldUnfound = result
+    .filter(w => !w.is_found_by_me && !w.is_new_in_portfolio)
+    .map(w => ({
+      ...w,
+      scan_locations: seenMap[w.plate] || [],
+    }));
+
 
   res.json({
-    new_referrals:     newReferrals,    // إحالات جديدة — تنبيه خاص
-    found_by_me:       foundByMe,       // لوح مطلوبة رصدتها
-    old_unfound:       oldUnfound,      // مطلوبة قديمة لم أرصدها
-    new_count:         newReferrals.length,
-    found_count:       foundByMe.length,
-    total_wanted:      allWanted.length,
+    new_referrals:  newReferrals,
+    found_by_me:    foundByMe,
+    old_unfound:    oldUnfound,
+    new_count:      newReferrals.length,
+    found_count:    foundByMe.length,
+    total_wanted:   allWanted.length,
   });
 });

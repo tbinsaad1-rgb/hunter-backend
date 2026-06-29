@@ -70,6 +70,14 @@ db.exec(`
     last_portfolio_update TEXT DEFAULT (datetime('now'))
   );
 
+
+  -- فهارس لتسريع البحث
+  CREATE INDEX IF NOT EXISTS idx_scans_user    ON scans(user_id);
+  CREATE INDEX IF NOT EXISTS idx_scans_plate   ON scans(plate);
+  CREATE INDEX IF NOT EXISTS idx_scans_date    ON scans(created_at);
+  CREATE INDEX IF NOT EXISTS idx_wanted_plate  ON wanted(plate);
+  CREATE INDEX IF NOT EXISTS idx_wanted_port   ON wanted(portfolio);
+
   CREATE TABLE IF NOT EXISTS agent_last_seen (
     user_id INTEGER PRIMARY KEY,
     last_seen TEXT DEFAULT (datetime('now')),
@@ -335,6 +343,10 @@ app.get('/api/version', (req, res) => {
   });
 });
 
+
+// ── Keep-alive لمنع Railway من النوم ──────────────────────────
+app.get('/ping', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
 // تشغيل السيرفر
 app.listen(PORT, () => console.log(`🚀 هنتر Backend يعمل على المنفذ ${PORT}`));
 
@@ -423,7 +435,12 @@ app.post('/api/admin/portfolios/upload', authMiddleware, adminOnly,
     if (!portfolioName) return res.status(400).json({ error: 'أدخل اسم المحفظة' });
 
     try {
-      const result = processExcelBuffer(req.file.buffer, portfolioName);
+      let result;
+      try {
+        result = processExcelBuffer(req.file.buffer, portfolioName);
+      } catch (parseErr) {
+        return res.status(400).json({ error: 'تعذر قراءة الملف: ' + parseErr.message });
+      }
 
       res.json({
         success: true,

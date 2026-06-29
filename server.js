@@ -707,14 +707,19 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
 
   const allFoundByMe = Object.values(foundMap);
 
-  // آخر 48 ساعة — يشمل اليوم والأمس
-  const last48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  // رصدتها اليوم = من SQL مباشرة — أدق من JavaScript filter
+  const recentFoundPlates = new Set(
+    db.prepare(`
+      SELECT DISTINCT s.plate 
+      FROM scans s
+      INNER JOIN wanted w ON s.plate = w.plate
+      WHERE s.user_id = ? 
+        AND s.created_at >= datetime('now', '-2 days')
+    `).all(req.user.id).map(r => r.plate)
+  );
 
-  // رصدتها = اللوحات التي رصدها في آخر 48 ساعة وهي مطلوبة
-  const foundByMe = allFoundByMe.filter(w => {
-    const latestScan = w.scan_locations[0];
-    return latestScan && latestScan.time >= last48h;
-  });
+  // رصدتها = اللوحات المرصودة في آخر يومين
+  const foundByMe = allFoundByMe.filter(w => recentFoundPlates.has(w.plate));
 
   // إحالات جديدة = رصدها + أُضيفت للمحفظة بعد آخر زيارة
   const newReferrals = allFoundByMe.filter(w =>

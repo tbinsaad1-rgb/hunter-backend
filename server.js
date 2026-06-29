@@ -707,23 +707,21 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
 
   const allFoundByMe = Object.values(foundMap);
 
-  // اليوم الحالي (بداية اليوم)
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayStr = todayStart.toISOString();
+  // آخر 48 ساعة — يشمل اليوم والأمس
+  const last48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-  // رصدتها اليوم فقط = اللوحات التي رصدها المندوب اليوم وهي مطلوبة
+  // رصدتها = اللوحات التي رصدها في آخر 48 ساعة وهي مطلوبة
   const foundByMe = allFoundByMe.filter(w => {
     const latestScan = w.scan_locations[0];
-    return latestScan && latestScan.time >= todayStr;
+    return latestScan && latestScan.time >= last48h;
   });
 
-  // إحالات جديدة = رصدها المندوب + أُضيفت للمحفظة بعد آخر زيارة
+  // إحالات جديدة = رصدها + أُضيفت للمحفظة بعد آخر زيارة
   const newReferrals = allFoundByMe.filter(w =>
     w.wanted_added_at > lastSeen || w.last_portfolio_update > lastSeen
   );
 
-  // الكل = كل اللوحات التي رصدها عبر كل الأيام
+  // الكل = كل اللوحات المطلوبة التي رصدها في أي وقت
   const oldUnfound = allFoundByMe;
 
   // إجمالي لوحات المحافظ (للإحصاء فقط)

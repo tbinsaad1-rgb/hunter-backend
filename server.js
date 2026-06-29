@@ -616,11 +616,20 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     ON CONFLICT(user_id) DO UPDATE SET last_seen = datetime('now')
   `).run(req.user.id);
 
-  // اللوحات التي رصدها المندوب من قبل
-  const seen = db.prepare(`
-    SELECT DISTINCT plate FROM scans WHERE user_id = ? AND is_wanted = 1
-  `).all(req.user.id).map(r => r.plate);
-  const seenSet = new Set(seen);
+  // اللوحات التي رصدها المندوب مع موقع الرصد
+  const seenScans = db.prepare(`
+    SELECT plate, lat, lng, note, created_at
+    FROM scans 
+    WHERE user_id = ? AND is_wanted = 1
+    ORDER BY created_at DESC
+  `).all(req.user.id);
+  
+  // مجموعة اللوحات المرصودة
+  const seenSet = new Set(seenScans.map(s => s.plate));
+  
+  // خريطة للوصول السريع لبيانات الرصد
+  const seenMap = {};
+  seenScans.forEach(s => { if (!seenMap[s.plate]) seenMap[s.plate] = s; });
 
   // كل اللوحات المطلوبة الحالية
   const allWanted = db.prepare('SELECT * FROM wanted ORDER BY last_portfolio_update DESC, created_at DESC').all();
@@ -633,8 +642,16 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
 
   // إحالات جديدة: في المحفظة + لم أرصدها + أُضيفت بعد آخر زيارة
   const newReferrals = result.filter(w => !w.is_found_by_me && w.is_new_in_portfolio);
-  // لوح مطلوبة: رصدتها أنا
-  const foundByMe   = result.filter(w => w.is_found_by_me);
+  // لوح مطلوبة: رصدتها أنا — مع إضافة موقع الرصد
+  const foundByMe = result
+    .filter(w => w.is_found_by_me)
+    .map(w => ({
+      ...w,
+      scan_lat: seenMap[w.plate]?.lat || null,
+      scan_lng: seenMap[w.plate]?.lng || null,
+      note:     seenMap[w.plate]?.note || null,
+      scan_time: seenMap[w.plate]?.created_at || null,
+    }));
   // قديمة لم أرصدها
   const oldUnfound  = result.filter(w => !w.is_found_by_me && !w.is_new_in_portfolio);
 

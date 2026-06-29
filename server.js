@@ -47,6 +47,7 @@ db.exec(`
     device_id TEXT,
     can_export_scans INTEGER NOT NULL DEFAULT 0,
     can_export_wanted INTEGER NOT NULL DEFAULT 0,
+    can_voice_scan INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -158,12 +159,12 @@ app.post('/api/login', (req, res) => {
   }
 
   const token = jwt.sign(
-    { id: user.id, username: user.username, full_name: user.full_name, role: user.role, group_name: user.group_name, can_export_scans: !!user.can_export_scans, can_export_wanted: !!user.can_export_wanted },
+    { id: user.id, username: user.username, full_name: user.full_name, role: user.role, group_name: user.group_name, can_export_scans: !!user.can_export_scans, can_export_wanted: !!user.can_export_wanted, can_voice_scan: !!user.can_voice_scan },
     JWT_SECRET,
     { expiresIn: '30d' }
   );
 
-  res.json({ token, user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, group_name: user.group_name, can_export_scans: !!user.can_export_scans, can_export_wanted: !!user.can_export_wanted } });
+  res.json({ token, user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, group_name: user.group_name, can_export_scans: !!user.can_export_scans, can_export_wanted: !!user.can_export_wanted, can_voice_scan: !!user.can_voice_scan } });
 });
 
 // ── تسجيل لوحة (المندوب) ────────────────────────────────────────
@@ -287,7 +288,7 @@ app.get('/api/admin/stats', authMiddleware, adminOnly, (req, res) => {
 
 // ── إدارة المستخدمين ─────────────────────────────────────────────
 app.get('/api/admin/users', authMiddleware, adminOnly, (req, res) => {
-  const users = db.prepare('SELECT id, username, full_name, role, group_name, is_active, device_id, can_export_scans, can_export_wanted, created_at FROM users').all();
+  const users = db.prepare('SELECT id, username, full_name, role, group_name, is_active, device_id, can_export_scans, can_export_wanted, can_voice_scan, created_at FROM users').all();
   res.json(users);
 });
 
@@ -306,13 +307,14 @@ app.post('/api/admin/users', authMiddleware, adminOnly, (req, res) => {
 });
 
 app.patch('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
-  const { is_active, device_id, password, can_export_scans, can_export_wanted } = req.body;
+  const { is_active, device_id, password, can_export_scans, can_export_wanted, can_voice_scan } = req.body;
   const { id } = req.params;
   if (is_active !== undefined)         db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, id);
   if (device_id === null)              db.prepare('UPDATE users SET device_id = NULL WHERE id = ?').run(id);
   if (password)                        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), id);
   if (can_export_scans !== undefined)  db.prepare('UPDATE users SET can_export_scans = ? WHERE id = ?').run(can_export_scans ? 1 : 0, id);
   if (can_export_wanted !== undefined) db.prepare('UPDATE users SET can_export_wanted = ? WHERE id = ?').run(can_export_wanted ? 1 : 0, id);
+  if (can_voice_scan !== undefined) db.prepare('UPDATE users SET can_voice_scan = ? WHERE id = ?').run(can_voice_scan ? 1 : 0, id);
   res.json({ success: true });
 });
 

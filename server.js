@@ -675,8 +675,9 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
   // لوحات المحافظ التي رصدها المندوب فعلاً (تطابق بين سجلاته والمحافظ)
   // نجلبها من scans مباشرة (is_wanted = 1 يعني تطابقت وقت التسجيل)
   const myFoundScans = db.prepare(`
-    SELECT s.plate, s.lat, s.lng, s.note, s.created_at,
-           w.company, w.model, w.portfolio, w.reason, w.last_portfolio_update
+    SELECT s.plate, s.lat, s.lng, s.note, s.created_at as scan_time,
+           w.company, w.model, w.portfolio, w.reason,
+           w.last_portfolio_update, w.created_at as wanted_added_at
     FROM scans s
     INNER JOIN wanted w ON s.plate = w.plate
     WHERE s.user_id = ?
@@ -694,6 +695,7 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
         portfolio: s.portfolio,
         reason: s.reason,
         last_portfolio_update: s.last_portfolio_update,
+        wanted_added_at: s.wanted_added_at,
         scan_locations: [],
       };
     }
@@ -703,23 +705,35 @@ app.get('/api/scans/new-wanted', authMiddleware, (req, res) => {
     });
   });
 
-  // لوح رصدتها = كل اللوحات التي تطابقت
-  const foundByMe = Object.values(foundMap);
+  const allFoundByMe = Object.values(foundMap);
 
-  // إحالات جديدة = رصدها المندوب + أُضيفت للمحفظة بعد آخر زيارة له
-  const newReferrals = foundByMe.filter(w => w.last_portfolio_update > lastSeen);
+  // اليوم الحالي (بداية اليوم)
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayStr = todayStart.toISOString();
 
-  // قديمة = رصدها المندوب + كانت في المحفظة قبل آخر زيارة
-  const oldUnfound = foundByMe.filter(w => w.last_portfolio_update <= lastSeen);
+  // رصدتها اليوم فقط = اللوحات التي رصدها المندوب اليوم وهي مطلوبة
+  const foundByMe = allFoundByMe.filter(w => {
+    const latestScan = w.scan_locations[0];
+    return latestScan && latestScan.time >= todayStr;
+  });
+
+  // إحالات جديدة = رصدها المندوب + أُضيفت للمحفظة بعد آخر زيارة
+  const newReferrals = allFoundByMe.filter(w =>
+    w.wanted_added_at > lastSeen || w.last_portfolio_update > lastSeen
+  );
+
+  // الكل = كل اللوحات التي رصدها عبر كل الأيام
+  const oldUnfound = allFoundByMe;
 
   // إجمالي لوحات المحافظ (للإحصاء فقط)
   const totalWanted = db.prepare('SELECT COUNT(*) as c FROM wanted').get().c;
 
 
   res.json({
-    new_referrals:  newReferrals,   // رصدتها + جديدة في المحفظة
-    found_by_me:    foundByMe,      // كل اللوحات التي رصدتها وهي مطلوبة
-    old_unfound:    oldUnfound,     // رصدتها + كانت قديمة في المحفظة
+    new_referrals:  newReferrals,  // إحالات جديدة منذ آخر زيارة
+    found_by_me:    foundByMe,     // رصدتها اليوم فقط
+    old_unfound:    oldUnfound,    // كل اللوحات المطلوبة التي رصدتها (كل الأيام)
     new_count:      newReferrals.length,
     found_count:    foundByMe.length,
     total_wanted:   totalWanted,

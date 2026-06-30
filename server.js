@@ -316,7 +316,7 @@ app.post('/api/admin/users', authMiddleware, adminOnly, (req, res) => {
 });
 
 app.patch('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
-  const { is_active, device_id, password, can_export_scans, can_export_wanted, can_voice_scan } = req.body;
+  const { is_active, device_id, password, can_export_scans, can_export_wanted, can_voice_scan, role, group_name, full_name } = req.body;
   const { id } = req.params;
   if (is_active !== undefined)         db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, id);
   if (device_id === null)              db.prepare('UPDATE users SET device_id = NULL WHERE id = ?').run(id);
@@ -324,6 +324,11 @@ app.patch('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
   if (can_export_scans !== undefined)  db.prepare('UPDATE users SET can_export_scans = ? WHERE id = ?').run(can_export_scans ? 1 : 0, id);
   if (can_export_wanted !== undefined) db.prepare('UPDATE users SET can_export_wanted = ? WHERE id = ?').run(can_export_wanted ? 1 : 0, id);
   if (can_voice_scan !== undefined) db.prepare('UPDATE users SET can_voice_scan = ? WHERE id = ?').run(can_voice_scan ? 1 : 0, id);
+  if (full_name)                       db.prepare('UPDATE users SET full_name = ? WHERE id = ?').run(full_name, id);
+  if (group_name !== undefined)        db.prepare('UPDATE users SET group_name = ? WHERE id = ?').run(group_name || null, id);
+  if (role && ['agent','group_admin'].includes(role)) {
+    db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
+  }
   res.json({ success: true });
 });
 

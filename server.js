@@ -327,6 +327,17 @@ app.patch('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
   res.json({ success: true });
 });
 
+// حذف مستخدم نهائياً (مندوب أو مشرف مجموعة) — admin فقط
+app.delete('/api/admin/users/:id', authMiddleware, adminOnly, (req, res) => {
+  const { id } = req.params;
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  if (!target) return res.status(404).json({ error: 'المستخدم غير موجود' });
+  if (target.role === 'admin') return res.status(403).json({ error: 'لا يمكن حذف حساب المشرف العام' });
+
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  res.json({ success: true, message: 'تم حذف الحساب نهائياً' });
+});
+
 // ── إدارة المركبات المطلوبة ──────────────────────────────────────
 app.get('/api/admin/wanted', authMiddleware, adminOnly, (req, res) => {
   res.json(db.prepare('SELECT * FROM wanted ORDER BY created_at DESC').all());

@@ -33,7 +33,10 @@ app.use((req, res, next) => {
 });
 
 // ── قاعدة البيانات ──────────────────────────────────────────────
-const db = new Database(path.join(__dirname, 'hunter.db'));
+// قاعدة البيانات — تُحفظ في مجلد دائم (Volume) إذا متوفر، وإلا في مجلد الكود
+const DB_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname;
+const db = new Database(path.join(DB_DIR, 'hunter.db'));
+console.log('📁 قاعدة البيانات في:', path.join(DB_DIR, 'hunter.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (

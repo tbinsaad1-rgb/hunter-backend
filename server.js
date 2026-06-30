@@ -48,6 +48,7 @@ db.exec(`
     can_export_scans INTEGER NOT NULL DEFAULT 0,
     can_export_wanted INTEGER NOT NULL DEFAULT 0,
     can_voice_scan INTEGER NOT NULL DEFAULT 0,
+    monthly_goal INTEGER DEFAULT 1000,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -135,6 +136,14 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// مشرف المجموعة أو الأدمن العام
+function groupAdminOnly(req, res, next) {
+  if (req.user.role !== 'admin' && req.user.role !== 'group_admin') {
+    return res.status(403).json({ error: 'هذه الصفحة لمشرفي المجموعات فقط' });
+  }
+  next();
+}
+
 // ── تسجيل الدخول ────────────────────────────────────────────────
 app.post('/api/login', (req, res) => {
   const { username, password, device_id } = req.body;
@@ -164,7 +173,7 @@ app.post('/api/login', (req, res) => {
     { expiresIn: '30d' }
   );
 
-  res.json({ token, user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, group_name: user.group_name, can_export_scans: !!user.can_export_scans, can_export_wanted: !!user.can_export_wanted, can_voice_scan: !!user.can_voice_scan } });
+  res.json({ token, user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, group_name: user.group_name, can_export_scans: !!user.can_export_scans, can_export_wanted: !!user.can_export_wanted, can_voice_scan: !!user.can_voice_scan, monthly_goal: user.monthly_goal } });
 });
 
 // ── تسجيل لوحة (المندوب) ────────────────────────────────────────
@@ -353,6 +362,230 @@ app.get('/api/version', (req, res) => {
     update_required: false,
     update_message: 'يرجى تحديث التطبيق للاستمرار',
   });
+});
+
+
+
+// ════════════════════════════════════════════════════════════════
+// ── مشرف المجموعة ──────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+
+// نظرة عامة على المجموعة — إحصائيات شاملة
+app.get('/api/group/overview', authMiddleware, groupAdminOnly, (req, res) => {
+  const groupName = req.user.role === 'admin' ? req.query.group : req.user.group_name;
+  if (!groupName) return res.status(400).json({ error: 'حدد اسم المجموعة' });
+
+  // كل مناديب هذه المجموعة (فقط agent، ليس group_admin آخر)
+  const agents = db.prepare(`
+    SELECT id, username, full_name, is_active, device_id, monthly_goal
+    FROM users WHERE group_name = ? AND role = 'agent'
+  `).all(groupName);
+
+  const agentIds = agents.map(a => a.id);
+  if (agentIds.length === 0) {
+    return res.json({ agents: [], stats: { today:0, week:0, month:0, total:0, active_now:0 } });
+  }
+
+  const placeholders = agentIds.map(() => '?').join(',');
+
+  // إحصائيات لكل فترة
+  const todayCount = db.prepare(`SELECT COUNT(*) as c FROM scans WHERE user_id IN (${placeholders}) AND date(created_at)=date('now')`).get(...agentIds).c;
+  const weekCount  = db.prepare(`SELECT COUNT(*) as c FROM scans WHERE user_id IN (${placeholders}) AND created_at >= datetime('now','-7 days')`).get(...agentIds).c;
+  const monthCount = db.prepare(`SELECT COUNT(*) as c FROM scans WHERE user_id IN (${placeholders}) AND created_at >= datetime('now','-30 days')`).get(...agentIds).c;
+  const totalCount = db.prepare(`SELECT COUNT(*) as c FROM scans WHERE user_id IN (${placeholders})`).get(...agentIds).c;
+
+  // نشط الآن = سجّل خلال آخر 15 دقيقة
+  const activeNow = db.prepare(`
+    SELECT COUNT(DISTINCT user_id) as c FROM scans
+    WHERE user_id IN (${placeholders}) AND created_at >= datetime('now','-15 minutes')
+  `).get(...agentIds).c;
+
+  // تفاصيل كل مندوب
+  const agentDetails = agents.map(a => {
+    const lastScan = db.prepare(`
+      SELECT plate, lat, lng, created_at FROM scans
+      WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+    `).get(a.id);
+
+    const todayAgentCount = db.prepare(`
+      SELECT COUNT(*) as c FROM scans WHERE user_id = ? AND date(created_at)=date('now')
+    `).get(a.id).c;
+
+    const monthAgentCount = db.prepare(`
+      SELECT COUNT(*) as c FROM scans WHERE user_id = ? AND created_at >= datetime('now','-30 days')
+    `).get(a.id).c;
+
+    const totalAgentCount = db.prepare(`
+      SELECT COUNT(*) as c FROM scans WHERE user_id = ?
+    `).get(a.id).c;
+
+    const isActive = lastScan && lastScan.created_at >= new Date(Date.now() - 15*60*1000).toISOString();
+    const isStopped = lastScan && lastScan.created_at < new Date(Date.now() - 30*60*1000).toISOString();
+    const minutesAgo = lastScan ? Math.floor((Date.now() - new Date(lastScan.created_at).getTime()) / 60000) : null;
+
+    // أول سجل اليوم لحساب مدة العمل
+    const firstToday = db.prepare(`
+      SELECT created_at FROM scans WHERE user_id = ? AND date(created_at)=date('now') ORDER BY created_at ASC LIMIT 1
+    `).get(a.id);
+    let workMinutes = 0;
+    if (firstToday && lastScan) {
+      workMinutes = Math.floor((new Date(lastScan.created_at) - new Date(firstToday.created_at)) / 60000);
+    }
+
+    return {
+      id: a.id,
+      full_name: a.full_name,
+      username: a.username,
+      is_active: isActive,
+      is_stopped: isStopped,
+      minutes_since_last: minutesAgo,
+      last_plate: lastScan?.plate || null,
+      last_lat: lastScan?.lat || null,
+      last_lng: lastScan?.lng || null,
+      today_count: todayAgentCount,
+      month_count: monthAgentCount,
+      total_count: totalAgentCount,
+      work_minutes_today: workMinutes,
+      monthly_goal: a.monthly_goal || 1000,
+    };
+  });
+
+  // ترتيب حسب أداء اليوم
+  agentDetails.sort((a,b) => b.today_count - a.today_count);
+
+  // هدف المجموعة = مجموع أهداف المناديب (أو هدف موحد)
+  const groupGoal = agents.reduce((sum,a) => sum + (a.monthly_goal || 1000), 0);
+
+  res.json({
+    agents: agentDetails,
+    stats: {
+      today: todayCount,
+      week: weekCount,
+      month: monthCount,
+      total: totalCount,
+      active_now: activeNow,
+      total_agents: agents.length,
+      avg_daily: agents.length ? Math.round(weekCount/7) : 0,
+      avg_weekly: weekCount,
+      avg_monthly: monthCount,
+      monthly_goal: groupGoal,
+      goal_progress: groupGoal ? Math.round((monthCount/groupGoal)*100) : 0,
+    },
+  });
+});
+
+// رسم بياني — أداء مندوب آخر 7 أيام
+app.get('/api/group/agent-chart/:id', authMiddleware, groupAdminOnly, (req, res) => {
+  const agentId = req.params.id;
+  // تحقق أن هذا المندوب في نفس مجموعة المشرف
+  if (req.user.role !== 'admin') {
+    const agent = db.prepare('SELECT group_name FROM users WHERE id = ?').get(agentId);
+    if (!agent || agent.group_name !== req.user.group_name) {
+      return res.status(403).json({ error: 'هذا المندوب ليس في مجموعتك' });
+    }
+  }
+
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const day = db.prepare(`
+      SELECT COUNT(*) as c FROM scans
+      WHERE user_id = ? AND date(created_at) = date('now', '-${i} days')
+    `).get(agentId).c;
+    days.push(day);
+  }
+  res.json({ days });
+});
+
+// مطلوبات المجموعة كاملة — كل اللوحات التي رصدها أي مندوب في المجموعة
+app.get('/api/group/wanted', authMiddleware, groupAdminOnly, (req, res) => {
+  const groupName = req.user.role === 'admin' ? req.query.group : req.user.group_name;
+  if (!groupName) return res.status(400).json({ error: 'حدد اسم المجموعة' });
+
+  const agents = db.prepare(`SELECT id, full_name FROM users WHERE group_name = ? AND role = 'agent'`).all(groupName);
+  const agentIds = agents.map(a => a.id);
+  if (agentIds.length === 0) return res.json([]);
+
+  const placeholders = agentIds.map(() => '?').join(',');
+  const nameMap = {};
+  agents.forEach(a => nameMap[a.id] = a.full_name);
+
+  const rows = db.prepare(`
+    SELECT s.plate, s.user_id, s.lat, s.lng, s.note, s.created_at,
+           w.company, w.model, w.portfolio, w.reason
+    FROM scans s
+    INNER JOIN wanted w ON s.plate = w.plate
+    WHERE s.user_id IN (${placeholders})
+    ORDER BY s.created_at DESC
+  `).all(...agentIds);
+
+  // تجميع — آخر رصد لكل لوحة
+  const seen = new Set();
+  const result = [];
+  for (const r of rows) {
+    if (seen.has(r.plate)) continue;
+    seen.add(r.plate);
+    result.push({
+      plate: r.plate,
+      agent_name: nameMap[r.user_id] || '',
+      lat: r.lat, lng: r.lng,
+      map_link: `https://maps.google.com/?q=${r.lat},${r.lng}`,
+      note: r.note,
+      company: r.company, model: r.model, portfolio: r.portfolio, reason: r.reason,
+      created_at: r.created_at,
+    });
+  }
+  res.json(result);
+});
+
+// تصدير سجلات المجموعة
+app.get('/api/group/export-scans', authMiddleware, groupAdminOnly, (req, res) => {
+  const groupName = req.user.role === 'admin' ? req.query.group : req.user.group_name;
+  if (!groupName) return res.status(400).json({ error: 'حدد اسم المجموعة' });
+  const todayOnly = req.query.today === '1';
+
+  const agents = db.prepare(`SELECT id, full_name FROM users WHERE group_name = ? AND role = 'agent'`).all(groupName);
+  const agentIds = agents.map(a => a.id);
+  if (agentIds.length === 0) return res.json([]);
+
+  const placeholders = agentIds.map(() => '?').join(',');
+  const filter = todayOnly ? "AND date(s.created_at) = date('now')" : '';
+
+  const scans = db.prepare(`
+    SELECT s.*, w.company as w_company, w.model as w_model, w.portfolio as w_portfolio
+    FROM scans s
+    LEFT JOIN wanted w ON s.plate = w.plate
+    WHERE s.user_id IN (${placeholders}) ${filter}
+    ORDER BY s.created_at DESC LIMIT 5000
+  `).all(...agentIds);
+
+  res.json(scans.map(s => ({
+    plate: s.plate, plate_spaced: s.plate_spaced || s.plate,
+    user_name: s.user_name,
+    is_wanted: s.is_wanted ? 'نعم' : 'لا',
+    wanted_company: s.wanted_company || s.w_company || '',
+    wanted_model: s.wanted_model || s.w_model || '',
+    wanted_portfolio: s.wanted_portfolio || s.w_portfolio || '',
+    note: s.note || '', lat: s.lat, lng: s.lng,
+    map_link: s.lat && s.lng ? `https://maps.google.com/?q=${s.lat},${s.lng}` : '',
+    created_at: s.created_at,
+  })));
+});
+
+// تعديل الهدف الشهري (مشرف المجموعة لنفسه أو admin لأي أحد)
+app.patch('/api/group/goal', authMiddleware, groupAdminOnly, (req, res) => {
+  const { agent_id, monthly_goal } = req.body;
+  if (!monthly_goal || monthly_goal < 1) return res.status(400).json({ error: 'هدف غير صالح' });
+
+  if (req.user.role !== 'admin') {
+    // تحقق أن المندوب في نفس مجموعة المشرف
+    const agent = db.prepare('SELECT group_name FROM users WHERE id = ?').get(agent_id);
+    if (!agent || agent.group_name !== req.user.group_name) {
+      return res.status(403).json({ error: 'هذا المندوب ليس في مجموعتك' });
+    }
+  }
+
+  db.prepare('UPDATE users SET monthly_goal = ? WHERE id = ?').run(monthly_goal, agent_id);
+  res.json({ success: true });
 });
 
 

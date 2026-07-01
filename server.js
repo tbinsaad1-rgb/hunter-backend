@@ -326,7 +326,13 @@ app.get('/api/admin/stats', authMiddleware, adminOnly, (req, res) => {
 
 // ── إدارة المستخدمين ─────────────────────────────────────────────
 app.get('/api/admin/users', authMiddleware, adminOnly, (req, res) => {
-  const users = db.prepare('SELECT id, username, full_name, role, group_name, is_active, device_id, can_export_scans, can_export_wanted, can_voice_scan, can_manage_portfolios, device_lock, created_at FROM users').all();
+  const users = db.prepare(`
+    SELECT id, username, full_name, role, group_name, is_active, device_id,
+           can_export_scans, can_export_wanted, can_voice_scan,
+           can_manage_portfolios, device_lock, created_at
+    FROM users
+    ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END, created_at ASC
+  `).all();
   res.json(users);
 });
 

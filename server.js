@@ -288,6 +288,7 @@ app.get('/api/scans/mine', authMiddleware, (req, res) => {
   const limit  = Math.min(parseInt(req.query.limit) || 50, 2000);
   const hoursRaw = parseInt(req.query.hours);
   const hours  = (!isNaN(hoursRaw) && hoursRaw > 0 && hoursRaw <= 720) ? hoursRaw : null;
+  const filter = hours
     ? `AND s.created_at >= datetime('now', '-${hours} hours')`
     : '';
 
